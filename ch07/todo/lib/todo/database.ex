@@ -7,40 +7,29 @@ defmodule Todo.Database do
   end
 
   def store(key, data) do
-    GenServer.cast(:database_server, {:store, key, data})
+    :database_server
+    |> GenServer.call({:get_worker, key})
+    |> Todo.DatabaseWorker.store(key, data)
   end
 
   def get(key) do
-    GenServer.call(:database_server, {:get, key})
+    :database_server
+    |> GenServer.call({:get_worker, key})
+    |> Todo.DatabaseWorker.get(key)
   end
 
   # Callback functions
   def init(db_folder) do
-    File.mkdir_p(db_folder)
-    {:ok, db_folder}
+    worker_pids =
+      Enum.reduce(0..2, %{}, fn(key, acc) ->
+        {:ok, worker_pid} = Todo.DatabaseWorker.start(db_folder)
+        Map.put(acc, key, worker_pid)
+      end)
+
+    {:ok, worker_pids}
   end
 
-  def handle_cast({:store, key, data}, db_folder) do
-    spawn(fn ->
-      db_folder
-      |> Path.join(key)
-      |> File.write!(:erlang.term_to_binary(data))
-    end)
-
-    {:noreply, db_folder}
-  end
-
-  def handle_call({:get, key}, caller, db_folder) do
-    spawn(fn ->
-      data =
-        case File.read(Path.join(db_folder, key)) do
-          {:ok, content} -> :erlang.binary_to_term(content)
-          _ -> nil
-        end
-
-        GenServer.reply(caller, data)
-    end)
-
-    {:noreply, db_folder}
+  def handle_call({:get_worker, key}, _, worker_pids) do
+    {:reply, Map.get(worker_pids, :erlang.phash2(key, 3)), worker_pids}
   end
 end
